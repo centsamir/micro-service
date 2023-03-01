@@ -1,0 +1,9 @@
+curl -X POST -H "Content-Type: application/json" -d '[{"id": 1, "first_name": "Samir", "last_name": "Idrissi", "emailid": "idrissisamir.pro@gmail.com"}]' http://localhost:8080/employee
+
+// func init() {
+// 	employees = []Employee{
+// 		{ID: 1, FirstName: "Samir", LastName: "Idrissi", EmailId: "idrissisamir.pro@gmail.com"},
+// 		{ID: 2, FirstName: "Sonia", LastName: "Doe", EmailId: "dsdsdsd@gmail.com"},
+// 		{ID: 3, FirstName: "Bob", LastName: "Smith", EmailId: "dsdsdsdsdsds@gmail.com"},
+// 	}
+// }
