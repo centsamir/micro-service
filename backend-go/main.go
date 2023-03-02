@@ -24,11 +24,13 @@ type Employee struct {
 
 var employees []Employee
 
+var bdd = "mybddapp"
+var bddUser = "root"
+var bddPassword = "samir"
+var bddPort = 3306
+
 func main() {
-	db, err := sql.Open("mysql", "root:samir@tcp(mybddapp:3306)/")
-	if err != nil {
-		fmt.Println(err.Error())
-	}
+	db, _ := ConnectToMySQLDatabase(bddUser, bddPassword, bdd, bddPort, "nil")
 	defer db.Close()
 
 	if err := createDatabaseIfNotExists(db, "mygoapp"); err != nil {
@@ -36,10 +38,7 @@ func main() {
 		return
 	}
 
-	db, err = sql.Open("mysql", "root:samir@tcp(mybddapp:3306)/mygoapp")
-	if err != nil {
-		fmt.Println(err.Error())
-	}
+	db, _ = ConnectToMySQLDatabase(bddUser, bddPassword, bdd, bddPort, "mygoapp")
 	defer db.Close()
 
 	if err := createTableIfNotExists(db); err != nil {
@@ -149,6 +148,22 @@ func postEmployee(rw http.ResponseWriter, r *http.Request) {
 		employee.ID = lastEmployee.ID + 1
 	} else {
 		employee.ID = 1
+	}
+
+	db, _ := ConnectToMySQLDatabase(bddUser, bddPassword, bdd, bddPort, "mygoapp")
+	defer db.Close()
+
+	// Préparer la requête d'insertion
+	stmt, err := db.Prepare("INSERT INTO employees(id, firstName, lastName, emailId) VALUES(?,?,?,?)")
+	if err != nil {
+		panic(err.Error())
+	}
+	defer stmt.Close()
+
+	// Exécuter la requête d'insertion avec les valeurs de l'employé
+	_, err = stmt.Exec(employee.ID, employee.FirstName, employee.LastName, employee.EmailId)
+	if err != nil {
+		panic(err.Error())
 	}
 
 	employees = append(employees, employee)
@@ -271,4 +286,30 @@ func createTableIfNotExists(db *sql.DB) error {
 	}
 
 	return nil
+}
+
+func ConnectToMySQLDatabase(username string, password string, hostname string, port int, database string) (*sql.DB, error) {
+	// Création de la chaîne de connexion
+	var connectionString string
+	if database == "nil" {
+		connectionString = fmt.Sprintf("%s:%s@tcp(%s:%d)/", username, password, hostname, port)
+	} else {
+		connectionString = fmt.Sprintf("%s:%s@tcp(%s:%d)/%s", username, password, hostname, port, database)
+	}
+
+	// Ouverture de la connexion à la base de données
+	db, err := sql.Open("mysql", connectionString)
+	if err != nil {
+		fmt.Println("Erreur lors de l'ouverture de la connexion à la base de données :", err)
+		return nil, err
+	}
+
+	// Vérification de la connexion
+	err = db.Ping()
+	if err != nil {
+		fmt.Println("Erreur lors du test de connexion à la base de données :", err)
+		return nil, err
+	}
+
+	return db, nil
 }
