@@ -1,0 +1,34 @@
+services:
+  mybddapp:
+    image: mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: samir
+    ports:
+      - "3306:3306"
+    volumes:
+      - bdd-data:/var/lib/mysql
+
+  mygoapp:
+    build:
+      context: ./backend-go
+    image: mygoapp
+    restart: always
+    ports:
+      - "8081:8081"
+    depends_on:
+      - mybddapp
+      
+  myangularapp:
+    build:
+      context: ./angular
+    image: myangularapp
+    restart: always
+    ports:
+      - "80:80"
+      - "4200:4200"
+    depends_on:
+      - mygoapp
+
+volumes:
+  bdd-data:
