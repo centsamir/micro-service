@@ -76,10 +76,41 @@ func getEmployees(rw http.ResponseWriter, r *http.Request) {
 	// Set Content-Type header to application/json
 	rw.Header().Set("Content-Type", "application/json")
 
+	db, _ := ConnectToMySQLDatabase(bddUser, bddPassword, bdd, bddPort, "mygoapp")
+	defer db.Close()
+
+	// Récupérer la liste des employés depuis la base de données
+	rows, err := db.Query("SELECT * FROM employees")
+	if err != nil {
+		log.Printf("Erreur lors de la récupération des employés depuis la base de données: %s", err)
+		rw.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	// Parcourir les résultats de la requête et stocker les employés dans une slice
+	var employees []Employee
+	for rows.Next() {
+		var employee Employee
+		if err := rows.Scan(&employee.ID, &employee.FirstName, &employee.LastName, &employee.EmailId); err != nil {
+			log.Printf("Erreur lors de la lecture des données de l'employé: %s", err)
+			rw.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		employees = append(employees, employee)
+	}
+
+	// Vérifier s'il y a eu une erreur lors de l'itération des résultats de la requête
+	if err := rows.Err(); err != nil {
+		log.Printf("Erreur lors de l'itération des résultats de la requête: %s", err)
+		rw.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
 	// Marshal employees slice to JSON
 	employeesJSON, err := json.Marshal(employees)
 	if err != nil {
-		log.Printf("Error marshaling employees to JSON: %s", err)
+		log.Printf("Erreur lors de la conversion des données des employés en JSON: %s", err)
 		rw.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -101,23 +132,28 @@ func getEmployee(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Find employee by ID
-	index := -1
-	for i, emp := range employees {
-		if emp.ID == id {
-			index = i
-			break
+	db, _ := ConnectToMySQLDatabase(bddUser, bddPassword, bdd, bddPort, "mygoapp")
+	defer db.Close()
+
+	// Query the database for the employee by ID
+	row := db.QueryRow("SELECT id, firstName, lastName, emailId FROM employees WHERE id = ?", id)
+
+	// Scan the row into an Employee struct
+	var employee Employee
+	err = row.Scan(&employee.ID, &employee.FirstName, &employee.LastName, &employee.EmailId)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			http.Error(rw, "Employee not found", http.StatusNotFound)
+			return
 		}
-	}
-	if index == -1 {
-		http.Error(rw, "Employee not found", http.StatusNotFound)
+		log.Printf("Error scanning employee row: %s", err)
+		rw.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
-	// Marshal employees slice to JSON
-	employeeJSON, err := json.Marshal(employees[index])
+	employeeJSON, err := json.Marshal(employee)
 	if err != nil {
-		log.Printf("Error marshaling employees to JSON: %s", err)
+		log.Printf("Error marshaling employee to JSON: %s", err)
 		rw.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -142,16 +178,21 @@ func postEmployee(rw http.ResponseWriter, r *http.Request) {
 		fmt.Println(err)
 	}
 
-	// Vérification du dernier ID.
-	if len(employees) > 0 {
-		lastEmployee := employees[len(employees)-1]
-		employee.ID = lastEmployee.ID + 1
-	} else {
-		employee.ID = 1
-	}
-
 	db, _ := ConnectToMySQLDatabase(bddUser, bddPassword, bdd, bddPort, "mygoapp")
 	defer db.Close()
+
+	// Vérification du dernier ID.
+	var lastEmployee int
+	err = db.QueryRow("SELECT id FROM employees ORDER BY id DESC LIMIT 1").Scan(&lastEmployee)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			employee.ID = 1
+		} else {
+			log.Fatal(err)
+		}
+	} else {
+		employee.ID = lastEmployee + 1
+	}
 
 	// Préparer la requête d'insertion
 	stmt, err := db.Prepare("INSERT INTO employees(id, firstName, lastName, emailId) VALUES(?,?,?,?)")
@@ -166,7 +207,6 @@ func postEmployee(rw http.ResponseWriter, r *http.Request) {
 		panic(err.Error())
 	}
 
-	employees = append(employees, employee)
 	rw.WriteHeader(http.StatusOK)
 }
 
@@ -183,19 +223,31 @@ func deleteEmployee(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Find employee by ID and remove from slice
-	index := -1
-	for i, emp := range employees {
-		if emp.ID == id {
-			index = i
-			break
-		}
+	db, _ := ConnectToMySQLDatabase(bddUser, bddPassword, bdd, bddPort, "mygoapp")
+	defer db.Close()
+
+	// Prepare the DELETE statement
+	stmt, err := db.Prepare("DELETE FROM employees WHERE id = ?")
+	if err != nil {
+		log.Fatalf("Error preparing DELETE statement: %v", err)
 	}
-	if index == -1 {
+	defer stmt.Close()
+
+	// Execute the DELETE statement
+	result, err := stmt.Exec(id)
+	if err != nil {
+		log.Fatalf("Error executing DELETE statement: %v", err)
+	}
+
+	// Check if the DELETE statement affected any rows
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		log.Fatalf("Error checking RowsAffected: %v", err)
+	}
+	if rowsAffected == 0 {
 		http.Error(rw, "Employee not found", http.StatusNotFound)
 		return
 	}
-	employees = append(employees[:index], employees[index+1:]...)
 
 	rw.WriteHeader(http.StatusOK)
 }
@@ -219,28 +271,42 @@ func putEmployee(rw http.ResponseWriter, r *http.Request) {
 		http.Error(rw, "can't read body", http.StatusBadRequest)
 	}
 
+	// Decode JSON request body to Employee struct
 	var updatedEmployee Employee
 	err = json.Unmarshal(bytesBody, &updatedEmployee)
-	//fmt.Println(updatedEmployee.FirstName)
 	if err != nil {
 		fmt.Println(err)
 	}
 
-	for i, employee := range employees {
-		if employee.ID == id {
-			updatedEmployee.ID = id
-			if updatedEmployee.FirstName == "" {
-				updatedEmployee.FirstName = employees[i].FirstName
-			}
-			if updatedEmployee.LastName == "" {
-				updatedEmployee.LastName = employees[i].LastName
-			}
-			if updatedEmployee.EmailId == "" {
-				updatedEmployee.EmailId = employees[i].EmailId
-			}
-			employees[i] = updatedEmployee
-			break
-		}
+	db, _ := ConnectToMySQLDatabase(bddUser, bddPassword, bdd, bddPort, "mygoapp")
+	defer db.Close()
+
+	// Update employee in database
+	stmt, err := db.Prepare("UPDATE employees SET firstName=?, lastName=?, emailId=? WHERE id=?")
+	if err != nil {
+		log.Printf("Error preparing SQL statement: %s", err)
+		http.Error(rw, "Server error", http.StatusInternalServerError)
+		return
+	}
+	defer stmt.Close()
+
+	result, err := stmt.Exec(updatedEmployee.FirstName, updatedEmployee.LastName, updatedEmployee.EmailId, id)
+	if err != nil {
+		log.Printf("Error updating employee in database: %s", err)
+		http.Error(rw, "Server error", http.StatusInternalServerError)
+		return
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		log.Printf("Error getting rows affected: %s", err)
+		http.Error(rw, "Server error", http.StatusInternalServerError)
+		return
+	}
+
+	if rowsAffected == 0 {
+		http.Error(rw, "Employee not found", http.StatusNotFound)
+		return
 	}
 
 	rw.WriteHeader(http.StatusOK)
