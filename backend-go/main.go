@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -10,6 +11,8 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/rs/cors"
+
+	_ "github.com/go-sql-driver/mysql"
 )
 
 type Employee struct {
@@ -22,6 +25,28 @@ type Employee struct {
 var employees []Employee
 
 func main() {
+	db, err := sql.Open("mysql", "root:samir@tcp(mybddapp:3306)/")
+	if err != nil {
+		fmt.Println(err.Error())
+	}
+	defer db.Close()
+
+	if err := createDatabaseIfNotExists(db, "mygoapp"); err != nil {
+		fmt.Println(err.Error())
+		return
+	}
+
+	db, err = sql.Open("mysql", "root:samir@tcp(mybddapp:3306)/mygoapp")
+	if err != nil {
+		fmt.Println(err.Error())
+	}
+	defer db.Close()
+
+	if err := createTableIfNotExists(db); err != nil {
+		fmt.Println(err.Error())
+		return
+	}
+
 	rtr := mux.NewRouter()
 
 	rtr.HandleFunc("/api/v1/employees", getEmployees).Methods("GET")
@@ -204,4 +229,46 @@ func putEmployee(rw http.ResponseWriter, r *http.Request) {
 	}
 
 	rw.WriteHeader(http.StatusOK)
+}
+
+func createDatabaseIfNotExists(db *sql.DB, dbname string) error {
+	// Vérifier si la base de données existe déjà
+	rows, err := db.Query(fmt.Sprintf("SHOW DATABASES LIKE '%s'", dbname))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	if rows.Next() {
+		return nil
+	}
+
+	// Créer la base de données si elle n'existe pas
+	_, err = db.Exec(fmt.Sprintf("CREATE DATABASE %s", dbname))
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func createTableIfNotExists(db *sql.DB) error {
+	// Vérifier si la table "employees" existe déjà
+	rows, err := db.Query("SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'employees'")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	if rows.Next() {
+		return nil
+	}
+
+	// Créer la table "employees" si elle n'existe pas encore
+	_, err = db.Exec("CREATE TABLE employees (id INT NOT NULL, firstName varchar(255) NULL, lastName varchar(255) NULL, emailId varchar(255) NULL, PRIMARY KEY (id));")
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
