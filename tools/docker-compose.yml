@@ -7,7 +7,7 @@ services:
     ports:
       - "3306:3306"
     volumes:
-      - bdd-data:/var/lib/mysql
+      - ../bdd-mysql/var/lib/mysql:/var/lib/mysql
 
   mygoapp:
     build:
@@ -29,6 +29,12 @@ services:
       - "4200:4200"
     depends_on:
       - mygoapp
-
-volumes:
-  bdd-data:
+    
+  myjenkinsapp:
+    image: jenkins/jenkins
+    restart: always
+    ports: 
+      - "50000:50000"
+      - "8080:8080"
+    volumes:
+      - ../ci-cd-jenkins/var/jenkins_home:/var/jenkins_home
