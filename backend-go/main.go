@@ -1,8 +1,8 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -11,43 +11,62 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/rs/cors"
+	"gorm.io/driver/mysql"
+	"gorm.io/gorm"
 
 	_ "github.com/go-sql-driver/mysql"
 )
 
 type Employee struct {
-	ID        int    `json:"id"`
-	FirstName string `json:"firstName"`
-	LastName  string `json:"lastName"`
-	EmailId   string `json:"emailId"`
+	ID        int    `json:"id" gorm:"primaryKey"`
+	FirstName string `json:"firstName" gorm:"column:firstName"`
+	LastName  string `json:"lastName" gorm:"column:lastName"`
+	EmailId   string `json:"emailId" gorm:"column:emailId"`
 }
 
 var employees []Employee
 
-var bdd = "mybddapp"
+var bdd = "localhost"
+var dbname = "mygoapp"
 var bddUser = "root"
 var bddPassword = "samir"
 var bddPort = 3306
 
 func main() {
-	db, _ := ConnectToMySQLDatabase(bddUser, bddPassword, bdd, bddPort, "nil")
-	defer db.Close()
+	// Connexion à la base de données MySQL
+	db, err := GormConnectToMySQLDatabase(bddUser, bddPassword, "nil", bddPort)
+	if err != nil {
+		panic("Erreur lors de la connexion a la base de donnees")
+	}
 
+	// Fermeture automatique de la connexion BDD
+	sqlDB, err := db.DB()
+	if err != nil {
+		panic(err)
+	}
+	defer sqlDB.Close()
+
+	// Création de la BDD si elle n'existe pas
 	if err := createDatabaseIfNotExists(db, "mygoapp"); err != nil {
 		fmt.Println(err.Error())
 		return
 	}
 
-	db, _ = ConnectToMySQLDatabase(bddUser, bddPassword, bdd, bddPort, "mygoapp")
-	defer db.Close()
+	// Selection de la BDD mygoapp sur la connexion existante
+	if err := db.Exec("USE mygoapp;").Error; err != nil {
+		panic("BDD non trouve")
+	}
 
+	// Création de la table employee si elle n'existe pas
 	if err := createTableIfNotExists(db); err != nil {
 		fmt.Println(err.Error())
 		return
 	}
 
+	// Création d'un Routeur http
 	rtr := mux.NewRouter()
 
+	// Mise en place des routes
 	rtr.HandleFunc("/api/v1/employees", getEmployees).Methods("GET")
 	rtr.HandleFunc("/api/v1/employees/{id}", getEmployee).Methods("GET")
 	rtr.HandleFunc("/api/v1/employees", postEmployee).Methods("POST")
@@ -76,33 +95,25 @@ func getEmployees(rw http.ResponseWriter, r *http.Request) {
 	// Set Content-Type header to application/json
 	rw.Header().Set("Content-Type", "application/json")
 
-	db, _ := ConnectToMySQLDatabase(bddUser, bddPassword, bdd, bddPort, "mygoapp")
-	defer db.Close()
-
-	// Récupérer la liste des employés depuis la base de données
-	rows, err := db.Query("SELECT * FROM employees")
+	db, err := GormConnectToMySQLDatabase(bddUser, bddPassword, dbname, bddPort)
 	if err != nil {
-		log.Printf("Erreur lors de la récupération des employés depuis la base de données: %s", err)
+		log.Printf("Erreur lors de la connexion à la base de données: %s", err)
 		rw.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	defer rows.Close()
 
-	// Parcourir les résultats de la requête et stocker les employés dans une slice
-	var employees []Employee
-	for rows.Next() {
-		var employee Employee
-		if err := rows.Scan(&employee.ID, &employee.FirstName, &employee.LastName, &employee.EmailId); err != nil {
-			log.Printf("Erreur lors de la lecture des données de l'employé: %s", err)
-			rw.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		employees = append(employees, employee)
+	// Fermeture automatique de la connexion BDD
+	sqlDB, err := db.DB()
+	if err != nil {
+		panic(err)
 	}
+	defer sqlDB.Close()
 
-	// Vérifier s'il y a eu une erreur lors de l'itération des résultats de la requête
-	if err := rows.Err(); err != nil {
-		log.Printf("Erreur lors de l'itération des résultats de la requête: %s", err)
+	// Récupération des employés depuis la base de donnée.
+	var employees []Employee
+	result := db.Find(&employees)
+	if result.Error != nil {
+		log.Printf("Erreur lors de la récupération des employés depuis la base de données: %s", result.Error)
 		rw.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -132,28 +143,36 @@ func getEmployee(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	db, _ := ConnectToMySQLDatabase(bddUser, bddPassword, bdd, bddPort, "mygoapp")
-	defer db.Close()
-
-	// Query the database for the employee by ID
-	row := db.QueryRow("SELECT id, firstName, lastName, emailId FROM employees WHERE id = ?", id)
-
-	// Scan the row into an Employee struct
-	var employee Employee
-	err = row.Scan(&employee.ID, &employee.FirstName, &employee.LastName, &employee.EmailId)
+	// Connexion BDD
+	db, err := GormConnectToMySQLDatabase(bddUser, bddPassword, dbname, bddPort)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			http.Error(rw, "Employee not found", http.StatusNotFound)
+		log.Printf("Erreur lors de la connexion à la base de données: %s", err)
+		rw.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	// Fermeture automatique de la connexion BDD
+	sqlDB, err := db.DB()
+	if err != nil {
+		panic(err)
+	}
+	defer sqlDB.Close()
+
+	// La requette sql pour trouvver l'employee par ID
+	var employee Employee
+	if err := db.Where("id = ?", id).First(&employee).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			http.Error(rw, "Employee non trouve", http.StatusNotFound)
 			return
 		}
-		log.Printf("Error scanning employee row: %s", err)
+		log.Printf("Erreur de la requette: %s", err)
 		rw.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
 	employeeJSON, err := json.Marshal(employee)
 	if err != nil {
-		log.Printf("Error marshaling employee to JSON: %s", err)
+		log.Printf("Erreur lors du marshaling employee en JSON: %s", err)
 		rw.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -168,43 +187,53 @@ func postEmployee(rw http.ResponseWriter, r *http.Request) {
 
 	bytesBody, err := ioutil.ReadAll(r.Body)
 	if err != nil {
-		fmt.Printf("Error reading body: %v", err)
-		http.Error(rw, "can't read body", http.StatusBadRequest)
+		fmt.Printf("Erreur lors de la lecture du body: %v", err)
+		http.Error(rw, "impossible de lire de body", http.StatusBadRequest)
 	}
 
+	// Unmarshal du json envoyé par le front pour le traiter en GO
 	var employee Employee
 	err = json.Unmarshal(bytesBody, &employee)
 	if err != nil {
 		fmt.Println(err)
+		rw.WriteHeader(http.StatusBadRequest)
+		return
 	}
 
-	db, _ := ConnectToMySQLDatabase(bddUser, bddPassword, bdd, bddPort, "mygoapp")
-	defer db.Close()
+	// Connexion BDD
+	db, err := GormConnectToMySQLDatabase(bddUser, bddPassword, dbname, bddPort)
+	if err != nil {
+		log.Printf("Erreur lors de la connexion à la base de données: %s", err)
+		rw.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	// Fermeture automatique de la connexion BDD
+	sqlDB, err := db.DB()
+	if err != nil {
+		panic(err)
+	}
+	defer sqlDB.Close()
 
 	// Vérification du dernier ID.
-	var lastEmployee int
-	err = db.QueryRow("SELECT id FROM employees ORDER BY id DESC LIMIT 1").Scan(&lastEmployee)
-	if err != nil {
-		if err == sql.ErrNoRows {
+	var lastEmployee Employee
+	if err := db.Order("id desc").Limit(1).Find(&lastEmployee).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			employee.ID = 1
 		} else {
-			log.Fatal(err)
+			log.Printf("Erreur dans la requette employee: %s", err)
+			rw.WriteHeader(http.StatusInternalServerError)
+			return
 		}
 	} else {
-		employee.ID = lastEmployee + 1
+		employee.ID = lastEmployee.ID + 1
 	}
 
-	// Préparer la requête d'insertion
-	stmt, err := db.Prepare("INSERT INTO employees(id, firstName, lastName, emailId) VALUES(?,?,?,?)")
-	if err != nil {
-		panic(err.Error())
-	}
-	defer stmt.Close()
-
-	// Exécuter la requête d'insertion avec les valeurs de l'employé
-	_, err = stmt.Exec(employee.ID, employee.FirstName, employee.LastName, employee.EmailId)
-	if err != nil {
-		panic(err.Error())
+	// Insertion de l'employé dans la base de données
+	if err := db.Create(&employee).Error; err != nil {
+		log.Printf("Erreur lors de la creation de l'employee: %s", err)
+		rw.WriteHeader(http.StatusInternalServerError)
+		return
 	}
 
 	rw.WriteHeader(http.StatusOK)
@@ -223,29 +252,31 @@ func deleteEmployee(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	db, _ := ConnectToMySQLDatabase(bddUser, bddPassword, bdd, bddPort, "mygoapp")
-	defer db.Close()
-
-	// Prepare the DELETE statement
-	stmt, err := db.Prepare("DELETE FROM employees WHERE id = ?")
+	// Connexion BDD
+	db, err := GormConnectToMySQLDatabase(bddUser, bddPassword, dbname, bddPort)
 	if err != nil {
-		log.Fatalf("Error preparing DELETE statement: %v", err)
-	}
-	defer stmt.Close()
-
-	// Execute the DELETE statement
-	result, err := stmt.Exec(id)
-	if err != nil {
-		log.Fatalf("Error executing DELETE statement: %v", err)
+		log.Printf("Erreur lors de la connexion à la base de données: %s", err)
+		rw.WriteHeader(http.StatusInternalServerError)
+		return
 	}
 
-	// Check if the DELETE statement affected any rows
-	rowsAffected, err := result.RowsAffected()
+	// Fermeture automatique de la connexion BDD
+	sqlDB, err := db.DB()
 	if err != nil {
-		log.Fatalf("Error checking RowsAffected: %v", err)
+		panic(err)
 	}
+	defer sqlDB.Close()
+
+	// Suppresion de l'employee avec l'ID
+	result := db.Delete(&Employee{}, id)
+	if result.Error != nil {
+		log.Fatalf("Error deleting employee: %v", result.Error)
+	}
+
+	// Vérification de la suppression
+	rowsAffected := result.RowsAffected
 	if rowsAffected == 0 {
-		http.Error(rw, "Employee not found", http.StatusNotFound)
+		http.Error(rw, "L'employee n'as pas ete trouve", http.StatusNotFound)
 		return
 	}
 
@@ -261,92 +292,92 @@ func putEmployee(rw http.ResponseWriter, r *http.Request) {
 	strId := vars["id"]
 	id, err := strconv.Atoi(strId)
 	if err != nil {
-		http.Error(rw, "Invalid employee ID", http.StatusBadRequest)
+		http.Error(rw, "ID de l'employee invalide", http.StatusBadRequest)
 		return
 	}
 
 	bytesBody, err := ioutil.ReadAll(r.Body)
 	if err != nil {
-		fmt.Printf("Error reading body: %v", err)
-		http.Error(rw, "can't read body", http.StatusBadRequest)
+		fmt.Printf("Erreur lors de la lecture du body: %v", err)
+		http.Error(rw, "impossible de lire le body", http.StatusBadRequest)
 	}
 
-	// Decode JSON request body to Employee struct
+	// Transformation du JSON en struc pour un traitement en GO
 	var updatedEmployee Employee
 	err = json.Unmarshal(bytesBody, &updatedEmployee)
 	if err != nil {
 		fmt.Println(err)
 	}
 
-	db, _ := ConnectToMySQLDatabase(bddUser, bddPassword, bdd, bddPort, "mygoapp")
-	defer db.Close()
-
-	// Update employee in database
-	stmt, err := db.Prepare("UPDATE employees SET firstName=?, lastName=?, emailId=? WHERE id=?")
+	// Connexion BDD
+	db, err := GormConnectToMySQLDatabase(bddUser, bddPassword, dbname, bddPort)
 	if err != nil {
-		log.Printf("Error preparing SQL statement: %s", err)
-		http.Error(rw, "Server error", http.StatusInternalServerError)
-		return
-	}
-	defer stmt.Close()
-
-	result, err := stmt.Exec(updatedEmployee.FirstName, updatedEmployee.LastName, updatedEmployee.EmailId, id)
-	if err != nil {
-		log.Printf("Error updating employee in database: %s", err)
-		http.Error(rw, "Server error", http.StatusInternalServerError)
+		log.Printf("Erreur lors de la connexion à la base de données: %s", err)
+		rw.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
-	rowsAffected, err := result.RowsAffected()
+	// Fermeture automatique de la connexion BDD
+	sqlDB, err := db.DB()
 	if err != nil {
-		log.Printf("Error getting rows affected: %s", err)
-		http.Error(rw, "Server error", http.StatusInternalServerError)
+		panic(err)
+	}
+	defer sqlDB.Close()
+
+	// Recherche de l'employee dans la bdd
+	var employee Employee
+	result := db.First(&employee, id)
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		http.Error(rw, "Employee non trouve", http.StatusNotFound)
+		return
+	} else if result.Error != nil {
+		log.Printf("Erreur dans la recherche d'un employe dans la base de donnees: %v", result.Error)
+		http.Error(rw, "Erreur serveur", http.StatusInternalServerError)
 		return
 	}
 
+	// Mise a jour de l'employee en base
+	result = db.Model(&employee).Updates(updatedEmployee)
+	if result.Error != nil {
+		log.Printf("Erreur lors de la mise a jour d'un employé dans la base de donnees: %v", result.Error)
+		http.Error(rw, "Erreur serveur", http.StatusInternalServerError)
+		return
+	}
+
+	// Vérification de la mise a jour
+	rowsAffected := result.RowsAffected
 	if rowsAffected == 0 {
-		http.Error(rw, "Employee not found", http.StatusNotFound)
+		http.Error(rw, "Employee non trouve", http.StatusNotFound)
 		return
 	}
 
 	rw.WriteHeader(http.StatusOK)
 }
 
-func createDatabaseIfNotExists(db *sql.DB, dbname string) error {
+func createDatabaseIfNotExists(db *gorm.DB, dbname string) error {
 	// Vérifier si la base de données existe déjà
-	rows, err := db.Query(fmt.Sprintf("SHOW DATABASES LIKE '%s'", dbname))
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	if rows.Next() {
+	var count int64
+	db.Raw(fmt.Sprintf("SELECT count(*) FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = '%s'", dbname)).Count(&count)
+	if count > 0 {
 		return nil
 	}
 
 	// Créer la base de données si elle n'existe pas
-	_, err = db.Exec(fmt.Sprintf("CREATE DATABASE %s", dbname))
-	if err != nil {
+	if err := db.Exec(fmt.Sprintf("CREATE DATABASE %s", dbname)).Error; err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func createTableIfNotExists(db *sql.DB) error {
+func createTableIfNotExists(db *gorm.DB) error {
 	// Vérifier si la table "employees" existe déjà
-	rows, err := db.Query("SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'employees'")
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	if rows.Next() {
+	if db.Migrator().HasTable(&Employee{}) {
 		return nil
 	}
 
 	// Créer la table "employees" si elle n'existe pas encore
-	_, err = db.Exec("CREATE TABLE employees (id INT NOT NULL, firstName varchar(255) NULL, lastName varchar(255) NULL, emailId varchar(255) NULL, PRIMARY KEY (id));")
+	err := db.AutoMigrate(&Employee{})
 	if err != nil {
 		return err
 	}
@@ -354,26 +385,16 @@ func createTableIfNotExists(db *sql.DB) error {
 	return nil
 }
 
-func ConnectToMySQLDatabase(username string, password string, hostname string, port int, database string) (*sql.DB, error) {
-	// Création de la chaîne de connexion
-	var connectionString string
-	if database == "nil" {
-		connectionString = fmt.Sprintf("%s:%s@tcp(%s:%d)/", username, password, hostname, port)
+func GormConnectToMySQLDatabase(user, password, dbname string, port int) (*gorm.DB, error) {
+	var dsn string
+	if dbname == "nil" {
+		dsn = fmt.Sprintf("%s:%s@tcp(127.0.0.1:%d)/?charset=utf8mb4&parseTime=True&loc=Local", user, password, port)
 	} else {
-		connectionString = fmt.Sprintf("%s:%s@tcp(%s:%d)/%s", username, password, hostname, port, database)
+		dsn = fmt.Sprintf("%s:%s@tcp(127.0.0.1:%d)/%s?charset=utf8mb4&parseTime=True&loc=Local", user, password, port, dbname)
 	}
 
-	// Ouverture de la connexion à la base de données
-	db, err := sql.Open("mysql", connectionString)
+	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
 	if err != nil {
-		fmt.Println("Erreur lors de l'ouverture de la connexion à la base de données :", err)
-		return nil, err
-	}
-
-	// Vérification de la connexion
-	err = db.Ping()
-	if err != nil {
-		fmt.Println("Erreur lors du test de connexion à la base de données :", err)
 		return nil, err
 	}
 
