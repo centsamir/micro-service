@@ -11,7 +11,7 @@ services:
 
   mygoapp:
     build:
-      context: ../backend-go
+      context: backend-go
     image: mygoapp
     restart: always
     ports:
@@ -21,7 +21,7 @@ services:
       
   myangularapp:
     build:
-      context: ../frontend-angular
+      context: frontend-angular
     image: myangularapp
     restart: always
     ports:
