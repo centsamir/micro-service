@@ -26,7 +26,6 @@ type Employee struct {
 
 var employees []Employee
 
-var bdd = "localhost"
 var dbname = "mygoapp"
 var bddUser = "root"
 var bddPassword = "samir"
@@ -388,9 +387,9 @@ func createTableIfNotExists(db *gorm.DB) error {
 func GormConnectToMySQLDatabase(user, password, dbname string, port int) (*gorm.DB, error) {
 	var dsn string
 	if dbname == "nil" {
-		dsn = fmt.Sprintf("%s:%s@tcp(127.0.0.1:%d)/?charset=utf8mb4&parseTime=True&loc=Local", user, password, port)
+		dsn = fmt.Sprintf("%s:%s@tcp(tools-mybddapp-1:%d)/?charset=utf8mb4&parseTime=True&loc=Local", user, password, port)
 	} else {
-		dsn = fmt.Sprintf("%s:%s@tcp(127.0.0.1:%d)/%s?charset=utf8mb4&parseTime=True&loc=Local", user, password, port, dbname)
+		dsn = fmt.Sprintf("%s:%s@tcp(tools-mybddapp-1:%d)/%s?charset=utf8mb4&parseTime=True&loc=Local", user, password, port, dbname)
 	}
 
 	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
