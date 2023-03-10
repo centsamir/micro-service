@@ -1,8 +1,8 @@
-# Le docker-compose se trouve dans le dossier tools
+# Utilisation
 
 ## Lancer la commande suivante
 
-cd tools && docker-compose up --build -d 
+docker-compose up --build -d 
 
 ## Login Jenkins 
 user : sdv
